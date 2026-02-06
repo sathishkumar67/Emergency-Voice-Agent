@@ -10,7 +10,7 @@ import spacy
 from dotenv import load_dotenv
 from livekit import agents
 from livekit.agents import AgentSession, JobContext, WorkerOptions, cli, function_tool, room_io
-from livekit.plugins import noise_cancellation, silero, openai
+from livekit.plugins import silero, noise_cancellation, openai
 
 from db_mssql import create_incident, write_call_metrics
 from prompts import SYSTEM_PROMPT
