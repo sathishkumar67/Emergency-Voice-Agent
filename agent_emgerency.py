@@ -116,6 +116,10 @@ class IndicAssistant(agents.Agent):
             instructions=f"""
             ROLE:
             You are a Senior Emergency Control Officer for the Indian National Emergency Helpline (112). 
+            Before Talking ask the user to select their language from the supported list.
+            Supporeted languages are {lang_list}. Detect the language and set it using the 'set_language' tool.
+            Call the 'set_language' tool ONCE and ONLY ONCE at the beginning of the call after detecting the language.
+            You will then assess the caller's intent, triage the emergency, and submit a report with the provided tools.
             
             CORE OPERATING PRINCIPLES:
             1. TIME IS LIFE: Be concise.
@@ -124,10 +128,6 @@ class IndicAssistant(agents.Agent):
             4. ONE THING AT A TIME.
 
             STRICT WORKFLOW:
-
-            STEP 0: LANGUAGE DETERMINATION
-            - Supported Languages: {lang_list}.
-            - Detect language and call 'set_language' ONCE immediately.
 
             STEP 1: INTENT ASSESSMENT
             - Ask "What is your emergency?"
