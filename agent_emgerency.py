@@ -10,19 +10,22 @@ from livekit.agents import AgentSession, JobContext, WorkerOptions, cli, functio
 from livekit.plugins import silero, noise_cancellation
 
 # Custom plugin imports
+# Ensure these files exist in your project structure
 from plugins.tts.indic_tts import TTS as IndicTTS, SUPPORTED_LANGUAGES 
 from plugins.stt.aibharath_conformer_stt import STT as IndicConformerSTT
 
 # Load Spacy
-nlp = spacy.load("en_core_web_sm")
+try:
+    nlp = spacy.load("en_core_web_sm")
+except OSError:
+    print("Warning: Spacy model 'en_core_web_sm' not found. Run: python -m spacy download en_core_web_sm")
+    nlp = None
 
 # Configuration
-LOG_DIR = Path("conversation_logs")
 JSON_DIR = Path("conversation_json")
 DB_FILE = Path("emergency_data.db")
 
 # Create directories if they don't exist
-LOG_DIR.mkdir(exist_ok=True)
 JSON_DIR.mkdir(exist_ok=True)
 
 load_dotenv()
@@ -49,6 +52,7 @@ class SQLiteManager:
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
+            # Column names defined here must match the INSERT query below
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS incidents (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -78,17 +82,18 @@ class SQLiteManager:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
+            # FIXED: Column names match the CREATE TABLE statement (snake_case)
             query = """
                 INSERT INTO incidents 
-                (TicketID, Timestamp, CallerName, Location, IncidentType, Classification, Confidence, Priority, Sentiment, Description, Language, JsonFilePath)
+                (ticket_id, timestamp, caller_name, location, incident_type, classification, confidence, priority, sentiment, description, language, json_file_path)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
             cursor.execute(query, (
                 data['ticket_id'],
                 data['timestamp'],
-                data['name'],
+                data['name'],          # Maps to caller_name column
                 data['location'],
-                data['type'],
+                data['type'],          # Maps to incident_type column
                 data['classification'],
                 data['confidence'],
                 data['priority'],
@@ -116,11 +121,14 @@ class IndicAssistant(agents.Agent):
             instructions=f"""
             ROLE:
             You are a Senior Emergency Control Officer for the Indian National Emergency Helpline (112). 
-            Before Talking ask the user to select their language from the supported list.
-            Supporeted languages are {lang_list}. Detect the language and set it using the 'set_language' tool.
-            Call the 'set_language' tool ONCE and ONLY ONCE at the beginning of the call after detecting the language.
-            You will then assess the caller's intent, triage the emergency, and submit a report with the provided tools.
             
+            STEP 0: LANGUAGE PROTOCOL (ABSOLUTE PRIORITY)
+            - Before doing anything else, you must identify the caller's language.
+            - Supported languages are: {lang_list}.
+            - Ask the user to select their language if unsure, or detect it from their first words.
+            - Call the 'set_language' tool ONCE and ONLY ONCE immediately after detection.
+            - Do not proceed to triage until the language is set.
+
             CORE OPERATING PRINCIPLES:
             1. TIME IS LIFE: Be concise.
             2. CALMNESS: Speak slowly if user is panicked.
@@ -219,7 +227,7 @@ class IndicAssistant(agents.Agent):
             "language": self.current_language
         }
 
-        # 1. Save JSON
+        # 1. Save JSON File
         json_filename = JSON_DIR / f"incident_{ticket_id}.json"
         conversation_data = {
             "metadata": db_data,
@@ -229,11 +237,24 @@ class IndicAssistant(agents.Agent):
         try:
             with open(json_filename, "w", encoding="utf-8") as f:
                 json.dump(conversation_data, f, ensure_ascii=False, indent=4)
+            print(f"[FILE] JSON saved to {json_filename}")
         except Exception as e:
             print(f"[ERROR] Failed to save JSON: {e}")
 
-        # 2. Write to SQLite
-        db_result = db_manager.insert_incident(db_data, str(json_filename))
+        # 2. Extract Metadata from the JSON File (as requested)
+        extracted_metadata = {}
+        try:
+            with open(json_filename, "r", encoding="utf-8") as f:
+                loaded_json = json.load(f)
+                extracted_metadata = loaded_json.get("metadata")
+                print(f"[FILE] Metadata extracted from JSON successfully.")
+        except Exception as e:
+            print(f"[ERROR] Failed to read JSON for metadata extraction: {e}")
+            # Fallback to in-memory data if file read fails
+            extracted_metadata = db_data
+
+        # 3. Write to SQLite using the extracted metadata
+        db_result = db_manager.insert_incident(extracted_metadata, str(json_filename))
         
         self._report_submitted = True
 
@@ -270,7 +291,6 @@ async def entrypoint(ctx: JobContext):
                 "content": evt.transcript,
                 "timestamp": datetime.datetime.now().isoformat()
             })
-            # Optional: Print user speech to console
             print(f"[USER] {evt.transcript}")
 
     @session.on("conversation_item_added")
