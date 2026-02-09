@@ -4,7 +4,6 @@ import json
 import os
 import sqlite3
 from pathlib import Path
-from prompt import instructions
 from dotenv import load_dotenv
 from livekit import agents
 from livekit.agents import AgentSession, JobContext, WorkerOptions, cli, function_tool, room_io
@@ -41,35 +40,40 @@ LANGUAGE_MAP = {
 }
 
 class SQLiteManager:
-    """Handles SQLite Operations"""
+    """Handles SQLite Operations with Debug Logging"""
     def __init__(self, db_path):
         self.db_path = db_path
         self.init_db()
 
     def init_db(self):
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS incidents (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ticket_id TEXT UNIQUE,
-                timestamp TEXT,
-                caller_name TEXT,
-                location TEXT,
-                incident_type TEXT,
-                classification TEXT,
-                confidence REAL,
-                priority TEXT,
-                sentiment TEXT,
-                description TEXT,
-                language TEXT,
-                json_file_path TEXT
-            )
-        """)
-        conn.commit()
-        conn.close()
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS incidents (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ticket_id TEXT UNIQUE,
+                    timestamp TEXT,
+                    caller_name TEXT,
+                    location TEXT,
+                    incident_type TEXT,
+                    classification TEXT,
+                    confidence REAL,
+                    priority TEXT,
+                    sentiment TEXT,
+                    description TEXT,
+                    language TEXT,
+                    json_file_path TEXT
+                )
+            """)
+            conn.commit()
+            conn.close()
+            print(f"[SYSTEM] Database initialized at {self.db_path}")
+        except Exception as e:
+            print(f"[ERROR] Database initialization failed: {e}")
 
     def insert_incident(self, data: dict, json_path: str):
+        print(f"[DB] Attempting to write ticket {data.get('ticket_id')} to database...")
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
@@ -95,8 +99,10 @@ class SQLiteManager:
             ))
             conn.commit()
             conn.close()
+            print(f"[DB] Successfully written ticket {data['ticket_id']}")
             return "Success: Written to SQLite"
         except Exception as e:
+            print(f"[DB ERROR] Failed to write ticket: {e}")
             return f"DB Error: {str(e)}"
 
 # Initialize DB Manager globally
@@ -107,21 +113,57 @@ class IndicAssistant(agents.Agent):
         lang_list = ", ".join([info["name"] for info in SUPPORTED_LANGUAGES.values()])
         
         super().__init__(
-            instructions=instructions
+            instructions=f"""
+            ROLE:
+            You are a Senior Emergency Control Officer for the Indian National Emergency Helpline (112). 
+            
+            CORE OPERATING PRINCIPLES:
+            1. TIME IS LIFE: Be concise.
+            2. CALMNESS: Speak slowly if user is panicked.
+            3. CLARITY: Short sentences (Max 12 words).
+            4. ONE THING AT A TIME.
+
+            STRICT WORKFLOW:
+
+            STEP 0: LANGUAGE DETERMINATION
+            - Supported Languages: {lang_list}.
+            - Detect language and call 'set_language' ONCE immediately.
+
+            STEP 1: INTENT ASSESSMENT
+            - Ask "What is your emergency?"
+            - Call 'detect_call_intent'.
+
+            STEP 2: CRITICAL TRIAGE
+            - Collect: Location, Incident Type, Caller Name, Phone Number, Status.
+            - Ask one question at a time.
+
+            STEP 3: SUBMISSION (CRITICAL)
+            - Once info is gathered, STOP asking.
+            - Call 'submit_emergency_report'.
+            - YOU MUST PROVIDE THESE EXACT ARGUMENTS:
+                1. caller_name (str)
+                2. location (str)
+                3. incident_type (str)
+                4. call_classification (str: "EMERGENCY", "INQUIRY", or "REPORT")
+                5. confidence_score (float: 0.0 to 1.0)
+                6. priority (str: "HIGH", "MEDIUM", or "LOW")
+                7. sentiment (str: "PANICKED", "CALM", or "AGGRESSIVE")
+                8. description (str)
+            - Call this tool ONLY ONCE.
+
+            STEP 4: DISCONNECT
+            - Read Ticket ID.
+            - Call 'disconnect_call'.
+            """
         )
         self.current_language = DEFAULT_LANGUAGE
         self._language_set = False
         self._report_submitted = False
-        
-        # Store conversation history here: [{"role": "user", "content": "..."}, ...]
         self.conversation_history = []
 
     @function_tool()
     async def detect_call_intent(self, context: agents.RunContext, user_statement: str):
-        """
-        Analyzes the user's initial statement to classify the call type and confidence.
-        """
-        return "Intent analyzed. Proceed based on the provided classification and confidence."
+        return "Intent analyzed."
 
     @function_tool()
     async def set_language(self, context: agents.RunContext, language: str):
@@ -130,18 +172,16 @@ class IndicAssistant(agents.Agent):
         
         lang_code = LANGUAGE_MAP.get(language.lower().strip(), "en")
         session = context.session
-
         if session.tts:
             try: session.tts.update_options(language=lang_code)
             except: pass
-        
         if session.stt:
             try: session.stt.update_options(language=lang_code, translate_to_english=True)
             except: pass
 
         self.current_language = lang_code
         self._language_set = True
-        return f"Language set to {language}. Proceeding."
+        return f"Language set to {language}."
 
     @function_tool()
     async def submit_emergency_report(
@@ -152,21 +192,19 @@ class IndicAssistant(agents.Agent):
         incident_type: str, 
         call_classification: str,
         confidence_score: float, 
-        priority: str,        # e.g., High, Medium, Low
-        sentiment: str,       # e.g., Panicked, Calm, Aggressive
+        priority: str,
+        sentiment: str,
         description: str
     ):
-        """
-        Submits the final report to SQLite and saves the full conversation JSON.
-        THIS SHOULD BE CALLED ONLY ONCE.
-        """
         if self._report_submitted:
-            return "Report already submitted. Please disconnect."
+            return "Report already submitted."
 
-        ticket_id = f"INC-{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
+        # Generate Ticket ID with Microseconds to prevent collisions
+        ticket_id = f"INC-{datetime.datetime.now().strftime('%Y%m%d%H%M%S%f')}"
         timestamp = datetime.datetime.now().isoformat()
         
-        # Prepare Data for DB
+        print(f"[TOOL] submit_emergency_report called for {ticket_id}")
+
         db_data = {
             "ticket_id": ticket_id,
             "timestamp": timestamp,
@@ -181,15 +219,18 @@ class IndicAssistant(agents.Agent):
             "language": self.current_language
         }
 
-        # 1. Save Conversation to JSON File
+        # 1. Save JSON
         json_filename = JSON_DIR / f"incident_{ticket_id}.json"
         conversation_data = {
             "metadata": db_data,
             "conversation_log": self.conversation_history
         }
         
-        with open(json_filename, "w", encoding="utf-8") as f:
-            json.dump(conversation_data, f, ensure_ascii=False, indent=4)
+        try:
+            with open(json_filename, "w", encoding="utf-8") as f:
+                json.dump(conversation_data, f, ensure_ascii=False, indent=4)
+        except Exception as e:
+            print(f"[ERROR] Failed to save JSON: {e}")
 
         # 2. Write to SQLite
         db_result = db_manager.insert_incident(db_data, str(json_filename))
@@ -203,14 +244,11 @@ class IndicAssistant(agents.Agent):
 
     @function_tool()
     async def disconnect_call(self, context: agents.RunContext):
-        """
-        Gracefully disconnects the call.
-        """
+        print("[SYSTEM] Disconnecting call...")
         try:
             await context.room.disconnect()
         except Exception:
             pass
-            
         return "Disconnecting call. Stay safe."
 
 async def entrypoint(ctx: JobContext):
@@ -224,43 +262,31 @@ async def entrypoint(ctx: JobContext):
     
     assistant = IndicAssistant()
         
-    # --- Logging Logic attached to Session ---
-
     @session.on("user_input_transcribed")
     def on_user(evt):
         if evt.is_final:
-            # Append to conversation history
             assistant.conversation_history.append({
                 "role": "user",
                 "content": evt.transcript,
                 "timestamp": datetime.datetime.now().isoformat()
             })
-            
-            # Optional: Keep a flat log file for quick debugging
-            with open(LOG_DIR / "flat_log.txt", "a", encoding="utf-8") as f:
-                f.write(f"[USER] {evt.transcript}\n")
+            # Optional: Print user speech to console
+            print(f"[USER] {evt.transcript}")
 
     @session.on("conversation_item_added")
     def on_agent(evt):
         if hasattr(evt, 'item'):
-            # Log Agent Text
             if evt.item.role == 'assistant' and evt.item.text_content:
                 assistant.conversation_history.append({
                     "role": "assistant",
                     "content": evt.item.text_content,
                     "timestamp": datetime.datetime.now().isoformat()
                 })
-                
-                with open(LOG_DIR / "flat_log.txt", "a", encoding="utf-8") as f:
-                    f.write(f"[AGENT] {evt.item.text_content}\n")
-
-            # Log Tool Calls (for debugging, not part of conversation json usually)
+                print(f"[AGENT] {evt.item.text_content}")
+            
             if evt.item.type == "function_call":
-                with open(LOG_DIR / "flat_log.txt", "a", encoding="utf-8") as f:
-                    f.write(f"[TOOL] {evt.item.name}({evt.item.arguments})\n")
+                print(f"[TOOL CALL] {evt.item.name}")
 
-    # --- Start Agent ---
-        
     await session.start(
         room=ctx.room,
         agent=assistant,
@@ -272,8 +298,6 @@ async def entrypoint(ctx: JobContext):
     )
     
     await ctx.connect()
-    
-    # Initial prompt
     await session.say("Emergency Helpline. What is your emergency?", allow_interruptions=True)
     
     
