@@ -4,6 +4,7 @@ dev = [
     "livekit-plugins-noise-cancellation~=0.2",
     "pip>=26.0.1",
     "pydantic>=2.12.5",
+    "pymsql",
     "pyodbc>=5.3.0",
     "python-dotenv>=1.2.1",
     "spacy>=3.8.11",
