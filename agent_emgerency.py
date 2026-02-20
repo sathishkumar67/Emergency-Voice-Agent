@@ -10,7 +10,6 @@ from livekit.agents import AgentSession, JobContext, WorkerOptions, cli, functio
 from livekit.plugins import silero, noise_cancellation
 
 # Custom plugin imports
-# Ensure these files exist in your project structure
 from plugins.tts.indic_tts import TTS as IndicTTS, SUPPORTED_LANGUAGES 
 from plugins.stt.aibharath_conformer_stt import STT as IndicConformerSTT
 
@@ -272,11 +271,12 @@ class IndicAssistant(agents.Agent):
             pass
         return "Disconnecting call. Stay safe."
 
+# change stt, llm, tts to use local hosted models. currently using cloud models.
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
-        stt=IndicConformerSTT(language=DEFAULT_LANGUAGE, translate_to_english=True),
-        llm="openai/gpt-4o-mini", 
-        tts=IndicTTS(language=DEFAULT_LANGUAGE, speaker="female"),
+        stt="deepgram/nova-3:multi",
+        llm="openai/gpt-4.1-mini",
+        tts="cartesia/sonic-3:9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
         vad=silero.VAD.load(),
         turn_detection="vad",
     )
