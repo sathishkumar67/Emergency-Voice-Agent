@@ -2,3 +2,12 @@
 /.venv
 /__pycache__
 /.env
+
+# SQLite database files
+*.db
+
+# Typo-named file with hardcoded credentials
+geneate_room_id.py
+
+# Generated conversation JSON output
+/conversation_json
